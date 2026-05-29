@@ -1,36 +1,52 @@
-import { NextResponse } from "next/server";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 
+export const dynamic = "force-dynamic";
+
+// Inline duck-typed Env — avoids depending on a generated CloudflareEnv that
+// doesn't declare these bindings (Sprint 18B ADR: cast via `as unknown as Env`,
+// no @cloudflare/workers-types). The generated CloudflareEnv has no DB/R2/HUB,
+// so `env.DB` type-errors unless we cast the whole env object to a local type.
+type D1 = { prepare: (sql: string) => { first: () => Promise<unknown> } };
+type R2 = { list: (opts: { limit: number }) => Promise<unknown> };
+type Hub = { fetch: (req: Request) => Promise<Response> };
+type Env = { DB?: D1; R2?: R2; HUB?: Hub };
+
 export async function GET() {
-  try {
-    const { env } = getCloudflareContext();
+  const { env } = await getCloudflareContext({ async: true });
+  const { DB, R2, HUB } = env as unknown as Env;
 
-    let db = false;
+  let db = false;
+  if (DB) {
     try {
-      await (env.DB as D1Database).prepare("SELECT 1").first();
+      await DB.prepare("SELECT 1").first();
       db = true;
-    } catch { db = false; }
+    } catch {
+      db = false;
+    }
+  }
 
-    let r2 = false;
+  let r2 = false;
+  if (R2) {
     try {
-      await (env.R2 as R2Bucket).list({ limit: 1 });
+      await R2.list({ limit: 1 });
       r2 = true;
-    } catch { r2 = false; }
+    } catch {
+      r2 = false;
+    }
+  }
 
-    const hub = typeof (env.HUB as { fetch?: unknown })?.fetch === "function";
+  const hub = typeof HUB?.fetch === "function";
 
-    return NextResponse.json({
-      status: "healthy",
+  const healthy = db && r2 && hub;
+  return Response.json(
+    {
+      status: healthy ? "healthy" : "degraded",
       worker: "cad",
       version: "0.1.0",
       db,
       r2,
       hub,
-    });
-  } catch (e) {
-    return NextResponse.json(
-      { status: "error", message: e instanceof Error ? e.message : String(e) },
-      { status: 500 }
-    );
-  }
+    },
+    { status: healthy ? 200 : 503 }
+  );
 }
