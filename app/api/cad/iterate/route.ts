@@ -50,13 +50,36 @@ function json(body: unknown, status = 200): Response {
 
 export async function POST(req: Request): Promise<Response> {
   const { env } = await getCloudflareContext({ async: true });
-  const { DB, CALCS, CALC_SECRET, CAD_ITERATE_SECRET } = env as unknown as Env;
+  const { DB, CALCS } = env as unknown as Env;
+
+  // Secrets: OpenNext populates wrangler-put secrets on process.env (nodejs_compat),
+  // and getCloudflareContext().env in some versions. Read from both — prefer env,
+  // fall back to process.env — so we are robust to whichever path is populated.
+  const e = env as unknown as Env;
+  const CAD_ITERATE_SECRET =
+    e.CAD_ITERATE_SECRET ?? process.env.CAD_ITERATE_SECRET;
+  const CALC_SECRET = e.CALC_SECRET ?? process.env.CALC_SECRET;
 
   // --- Auth: secret-header bypass (smoke) OR sb-access-token cookie (prod) ---
   let userId: string;
   let tenantId: string;
 
   const providedSecret = req.headers.get("X-Cad-Iterate-Secret");
+
+  // TEMP DIAGNOSTIC (Sprint 30I-core auth debug) — remove once smoke passes.
+  // Does NOT leak the secret: reports presence + lengths + a 1-char fingerprint only.
+  if (req.headers.get("X-Cad-Debug") === "1") {
+    return json({
+      debug: true,
+      envHasSecret: typeof e.CAD_ITERATE_SECRET === "string",
+      procEnvHasSecret: typeof process.env.CAD_ITERATE_SECRET === "string",
+      resolvedSecretLen: CAD_ITERATE_SECRET ? CAD_ITERATE_SECRET.length : 0,
+      headerReceived: providedSecret !== null,
+      headerLen: providedSecret ? providedSecret.length : 0,
+      match: !!CAD_ITERATE_SECRET && providedSecret === CAD_ITERATE_SECRET,
+    });
+  }
+
   if (CAD_ITERATE_SECRET && providedSecret === CAD_ITERATE_SECRET) {
     userId = "smoke-test";
     tenantId = "default";
