@@ -18,3 +18,9 @@ bucket_name = "ll-cockpit-r2"
 [[services]]
 binding = "HUB"
 service = "ll-cockpit"
+
+# Service binding to engineering-calcs for shaft sizing/analysis (Sprint 30I, Hub & Spoke #10).
+# env.CALCS.fetch(...) routes internally — never the public URL.
+[[services]]
+binding = "CALCS"
+service = "engineering-calcs"
