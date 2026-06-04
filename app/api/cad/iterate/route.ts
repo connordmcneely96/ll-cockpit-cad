@@ -13,10 +13,11 @@ type D1Stmt = {
   first: <T = unknown>() => Promise<T | null>;
 };
 type D1 = { prepare: (sql: string) => D1Stmt };
-type CalcsBinding = { fetch: (req: Request) => Promise<Response> };
+type ServiceBinding = { fetch: (req: Request) => Promise<Response> };
 type Env = {
   DB?: D1;
-  CALCS?: CalcsBinding;
+  CALCS?: ServiceBinding;
+  HUB?: ServiceBinding;
   CALC_SECRET?: string;
   CAD_ITERATE_SECRET?: string;
 };
@@ -48,10 +49,85 @@ function json(body: unknown, status = 200): Response {
   return Response.json(body, { status });
 }
 
+// ── ATLAS citation wiring (Sprint 30I unstub) ──
+// After a design converges, ask ATLAS (hub /api/atlas/query, reached via the HUB
+// service binding — never a public URL) for the governing standard behind each
+// engineering check. Best-effort: any failure (non-200, rejected, empty sources)
+// simply omits that check's citation. A converged design NEVER fails because a
+// citation lookup hiccuped — citations are an annotation layer, not a dependency.
+interface Citation {
+  check: string;
+  doc: string;
+  section: string;
+  page: number | null;
+}
+
+const CITATION_QUERIES: { check: string; question: string }[] = [
+  {
+    check: "stress",
+    question:
+      "What standard and formula governs combined bending and torsional (von Mises) stress on a rotating shaft?",
+  },
+  {
+    check: "deflection",
+    question:
+      "What governs allowable lateral deflection of a shaft under radial load?",
+  },
+  {
+    check: "critical_speed",
+    question:
+      "What standard governs rotordynamic critical speed margin for a rotating shaft or pump rotor?",
+  },
+];
+
+async function fetchCitations(
+  HUB: ServiceBinding | undefined,
+  material: string,
+  projectType: string
+): Promise<Citation[]> {
+  if (!HUB) return [];
+  const out: Citation[] = [];
+  const seen = new Set<string>();
+  for (const { check, question } of CITATION_QUERIES) {
+    try {
+      const resp = await HUB.fetch(
+        new Request(
+          "https://hub.internal/api/atlas/query?secret=engineering-30b",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              question,
+              project_context: `${projectType} shaft, material ${material}`,
+              max_sources: 3,
+            }),
+          }
+        )
+      );
+      if (!resp.ok) continue;
+      const data = (await resp.json()) as {
+        sources?: { doc: string; section: string; page: number | null }[];
+        rejected?: boolean;
+      };
+      if (data.rejected || !data.sources) continue;
+      for (const s of data.sources) {
+        if (!s.doc) continue;
+        const key = `${check}::${s.doc}::${s.section}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ check, doc: s.doc, section: s.section, page: s.page ?? null });
+      }
+    } catch {
+      // best-effort: a citation failure never breaks a converged design
+    }
+  }
+  return out;
+}
+
 export async function POST(req: Request): Promise<Response> {
   const { env } = await getCloudflareContext({ async: true });
   const e = env as unknown as Env;
-  const { DB, CALCS } = e;
+  const { DB, CALCS, HUB } = e;
 
   // Secrets: OpenNext populates wrangler-put secrets on process.env (nodejs_compat)
   // and on getCloudflareContext().env in some versions. Read env first, fall back
@@ -141,10 +217,18 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
+  // --- ATLAS citations: computed ONCE after convergence (never inside the loop) ---
+  // Best-effort; an empty array is acceptable. Annotates the final converged design.
+  const citations = await fetchCitations(HUB, result.gen.material, brief.projectType);
+
   // --- Persist one revision per iteration, chained via parent_revision_id ---
+  // Citations are attached to the FINAL revision's design_intent (they describe the
+  // converged design, computed once after the loop).
   let parentRevisionId: string | null = null;
   let lastRevisionId: string | null = null;
-  for (const entry of result.iterations) {
+  const lastIndex = result.iterations.length - 1;
+  for (let i = 0; i < result.iterations.length; i++) {
+    const entry = result.iterations[i];
     const revisionId = crypto.randomUUID();
     const designIntent = JSON.stringify({
       brief,
@@ -152,6 +236,7 @@ export async function POST(req: Request): Promise<Response> {
       stressPassed: entry.stressPassed,
       deflectionPassed: entry.deflectionPassed,
       criticalSpeedPassed: entry.criticalSpeedPassed,
+      ...(i === lastIndex ? { citations } : {}),
     });
     try {
       await DB.prepare(
@@ -223,7 +308,7 @@ export async function POST(req: Request): Promise<Response> {
       criticalSpeed: result.finalChecks.critical,
     },
     iterations: result.iterations,
-    citations: [], // STUB — wired in Sprint 30E (ATLAS RAG)
+    citations, // Sprint 30I unstub — real ATLAS spec citations (best-effort)
     requiresConnorReview: true, // every output is gated by Connor's PE review
     summary,
   });
