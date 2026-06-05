@@ -2,6 +2,7 @@ import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { z } from "zod";
 import { validateToken } from "@/lib/auth";
 import { iterate, type ShaftBrief } from "@/lib/iterate";
+import { getManifest } from "@/lib/assembly-manifest";
 
 export const dynamic = "force-dynamic";
 
@@ -286,12 +287,70 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
+  // --- Assembly tree (Sprint 30L foundation) ---
+  // Write one top-level cad_assembly + N cad_feature rows from the project-type
+  // manifest. ONLY the sized shaft feature carries real parameters (diameter, loads,
+  // the three checks, citations); declared features are honest empty slots awaiting
+  // sizing in 30L-2 — we never fabricate parameters for un-sized components.
+  // parent_assembly_id / parent_feature_id stay NULL this slice (flat assembly;
+  // sub-trees arrive with 30L-2). The assembly IS the new deliverable, so a hard
+  // failure here surfaces as 500 (the project + revisions already persisted).
+  const assemblyId = crypto.randomUUID();
+  try {
+    await DB.prepare(
+      `INSERT INTO cad_assemblies (id, project_id, parent_assembly_id, name, description, position_json)
+       VALUES (?, ?, NULL, ?, ?, ?)`
+    )
+      .bind(
+        assemblyId,
+        projectId,
+        brief.name,
+        `Top-level ${brief.projectType} assembly`,
+        JSON.stringify({ x: 0, y: 0, z: 0 })
+      )
+      .run();
+
+    const manifest = getManifest(brief.projectType);
+    for (const comp of manifest) {
+      const featureId = crypto.randomUUID();
+      const params =
+        comp.status === "sized"
+          ? {
+              status: "sized",
+              diameter: result.finalDiameter,
+              material: result.gen.material,
+              torque: result.gen.torque,
+              radialLoad: result.gen.radialLoad,
+              bendingMoment: result.gen.bendingMoment,
+              checks: {
+                stress: result.finalChecks.stress,
+                deflection: result.finalChecks.deflection,
+                criticalSpeed: result.finalChecks.critical,
+              },
+              citations,
+            }
+          : { status: "declared", note: "Awaiting sizing (Sprint 30L-2 composer)" };
+      await DB.prepare(
+        `INSERT INTO cad_features (id, assembly_id, parent_feature_id, feature_type, parameters_json, order_index)
+         VALUES (?, ?, NULL, ?, ?, ?)`
+      )
+        .bind(featureId, assemblyId, comp.feature_type, JSON.stringify(params), comp.order_index)
+        .run();
+    }
+  } catch (err) {
+    return json(
+      { error: "assembly_insert_failed", projectId, message: err instanceof Error ? err.message : String(err) },
+      500
+    );
+  }
+
   const summary = result.converged
     ? `Converged to ${result.finalDiameter.toFixed(2)} in ${result.gen.material} in ${result.totalIterations} iteration${result.totalIterations === 1 ? "" : "s"}.`
     : `Did not converge within ${result.totalIterations} iterations (diameter capped at ${result.finalDiameter.toFixed(2)} in). Manual review required.`;
 
   return json({
     projectId,
+    assemblyId,
     runId,
     converged: result.converged,
     totalIterations: result.totalIterations,
