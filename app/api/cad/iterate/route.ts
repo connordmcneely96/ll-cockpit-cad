@@ -3,6 +3,7 @@ import { z } from "zod";
 import { validateToken } from "@/lib/auth";
 import { iterate, type ShaftBrief } from "@/lib/iterate";
 import { getManifest } from "@/lib/assembly-manifest";
+import { computeOverhungReactions, selectBearing } from "@/lib/bearings";
 
 export const dynamic = "force-dynamic";
 
@@ -311,25 +312,86 @@ export async function POST(req: Request): Promise<Response> {
       .run();
 
     const manifest = getManifest(brief.projectType);
+
+    const reactions =
+      brief.projectType === "pump"
+        ? computeOverhungReactions(result.gen.radialLoad, brief.overhang, brief.bearingSpan)
+        : null;
+
     for (const comp of manifest) {
       const featureId = crypto.randomUUID();
-      const params =
-        comp.status === "sized"
-          ? {
-              status: "sized",
-              diameter: result.finalDiameter,
-              material: result.gen.material,
-              torque: result.gen.torque,
-              radialLoad: result.gen.radialLoad,
-              bendingMoment: result.gen.bendingMoment,
-              checks: {
-                stress: result.finalChecks.stress,
-                deflection: result.finalChecks.deflection,
-                criticalSpeed: result.finalChecks.critical,
-              },
-              citations,
+
+      let params: unknown;
+
+      if (comp.status === "sized") {
+        params = {
+          status: "sized",
+          diameter: result.finalDiameter,
+          material: result.gen.material,
+          torque: result.gen.torque,
+          radialLoad: result.gen.radialLoad,
+          bendingMoment: result.gen.bendingMoment,
+          checks: {
+            stress: result.finalChecks.stress,
+            deflection: result.finalChecks.deflection,
+            criticalSpeed: result.finalChecks.critical,
+          },
+          citations,
+        };
+      } else if (
+        brief.projectType === "pump" &&
+        comp.feature_type === "bearing" &&
+        reactions !== null
+      ) {
+        const reaction =
+          comp.order_index === 1
+            ? reactions.driveEnd
+            : comp.order_index === 2
+            ? reactions.nonDrive
+            : null;
+
+        if (reaction !== null) {
+          try {
+            const sel = await selectBearing(
+              { CALCS: CALCS!, CALC_SECRET: CALC_SECRET ?? undefined },
+              {
+                shaftDiameter: result.finalDiameter,
+                appliedRadialLoad: reaction,
+                speed: brief.speed,
+                targetLifeHours: 25000,
+              }
+            );
+            if (sel.bearing !== null) {
+              params = {
+                status: "sized",
+                kind: "bearing",
+                designation: sel.bearing.designation,
+                series: sel.bearing.series,
+                bore_in: sel.bearing.bore_in,
+                dynamicLoadRating_lbf: sel.bearing.C_lbf,
+                staticLoadRating_lbf: sel.bearing.C0_lbf,
+                appliedRadialLoad_lbf: reaction,
+                ratingLife_L10h: sel.life.basicRatingLife_hours,
+                staticSafetyFactor: sel.life.staticSafetyFactor,
+                targetLifeHours: 25000,
+                standard: "ISO 281:2007",
+                reference: sel.life.reference,
+                formula: sel.life.formula,
+                note: "C/C0 from embedded SKF catalog — PE-verify before deliverable.",
+              };
+            } else {
+              params = { status: "declared", note: sel.reason };
             }
-          : { status: "declared", note: "Awaiting sizing (Sprint 30L-2 composer)" };
+          } catch {
+            params = { status: "declared", note: "Bearing life calc unavailable" };
+          }
+        } else {
+          params = { status: "declared", note: "Awaiting sizing (Sprint 30L-2 composer)" };
+        }
+      } else {
+        params = { status: "declared", note: "Awaiting sizing (Sprint 30L-2 composer)" };
+      }
+
       await DB.prepare(
         `INSERT INTO cad_features (id, assembly_id, parent_feature_id, feature_type, parameters_json, order_index)
          VALUES (?, ?, NULL, ?, ?, ?)`
