@@ -344,10 +344,8 @@ export async function POST(req: Request): Promise<Response> {
         reactions !== null
       ) {
         const reaction =
-          comp.order_index === 1
-            ? reactions.driveEnd
-            : comp.order_index === 2
-            ? reactions.nonDrive
+          comp.order_index === 1 || comp.order_index === 2
+            ? reactions.driveEnd   // governing (larger) overhung reaction; size both bearings to it
             : null;
 
         if (reaction !== null) {
@@ -377,7 +375,7 @@ export async function POST(req: Request): Promise<Response> {
                 standard: "ISO 281:2007",
                 reference: sel.life.reference,
                 formula: sel.life.formula,
-                note: "C/C0 from embedded SKF catalog — PE-verify before deliverable.",
+                note: "Both bearings sized to the governing (larger) overhung reaction; per-position (drive vs non-drive) differentiation pending a rotor-geometry model. C/C0 from embedded SKF catalog — PE-verify before deliverable.",
               };
             } else {
               params = { status: "declared", note: sel.reason };
