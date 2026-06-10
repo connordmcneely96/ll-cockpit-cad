@@ -101,3 +101,32 @@ export function checkCriticalSpeed(
 ): Promise<CheckResult> {
   return calcPost<CheckResult>(env, "/api/shafts/critical-speed", p);
 }
+
+export interface BearingLifeResult {
+  equivalentLoad: number;
+  basicRatingLife_Mrev: number;
+  basicRatingLife_hours: number;
+  adjustedLife_hours: number;
+  staticSafetyFactor: number | null;
+  requiredLifeHours: number | null;
+  passed: boolean | null;
+  a1: number;
+  bearingType: "ball" | "roller";
+  formula: string;
+  reference: string;
+}
+
+export function bearingLife(
+  env: CalcEnv,
+  p: {
+    Fr: number;
+    Fa?: number;
+    C: number;
+    speed: number;
+    bearingType: "ball" | "roller";
+    C0?: number;
+    requiredLifeHours?: number;
+  }
+): Promise<BearingLifeResult> {
+  return calcPost<BearingLifeResult>(env, "/api/bearings/life", p);
+}
