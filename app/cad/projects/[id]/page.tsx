@@ -49,12 +49,21 @@ type SizedParams = {
   citations?: { check: string; doc: string; section: string; page: number | null }[];
 };
 
+type BearingParams = {
+  status: "sized"; kind: "bearing";
+  designation: string; series: string; bore_in: number;
+  dynamicLoadRating_lbf: number; staticLoadRating_lbf: number;
+  appliedRadialLoad_lbf: number; ratingLife_L10h: number;
+  staticSafetyFactor: number | null; targetLifeHours: number;
+  standard: string; reference: string; note?: string;
+};
+
 type DeclaredParams = {
   status: "declared";
   note?: string;
 };
 
-type FeatureParams = SizedParams | DeclaredParams | null;
+type FeatureParams = SizedParams | BearingParams | DeclaredParams | null;
 
 function safeParse(s: string | null | undefined): FeatureParams {
   if (!s) return null;
@@ -195,6 +204,80 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
                 const isSized = params?.status === "sized";
 
                 if (isSized) {
+                  const isBearing = (params as { kind?: string }).kind === "bearing";
+
+                  if (isBearing) {
+                    const b = params as BearingParams;
+                    const titleSuffix = b.designation ? ` · SKF ${b.designation}` : "";
+                    const boreStr = b.bore_in != null ? `Bore Ø${b.bore_in} in` : "Bore Ø— in";
+                    const seriesStr = b.series ?? "—";
+                    const loadStr = Number.isFinite(b.appliedRadialLoad_lbf)
+                      ? `Applied radial load ${Math.round(b.appliedRadialLoad_lbf).toLocaleString()} lbf`
+                      : "Applied radial load —";
+                    const lifeStr = Number.isFinite(b.ratingLife_L10h) && Number.isFinite(b.targetLifeHours)
+                      ? `L10 life ${Math.round(b.ratingLife_L10h).toLocaleString()} h (target ${Math.round(b.targetLifeHours).toLocaleString()})`
+                      : "L10 life —";
+                    const footerStandard = b.standard ?? "";
+                    const footerNote = b.note ? ` — ${b.note}` : "";
+                    const footer = footerStandard ? `${footerStandard}${footerNote}` : footerNote.replace(/^ — /, "");
+                    return (
+                      <div
+                        key={f.id}
+                        style={{
+                          background: "#fff",
+                          borderRadius: 12,
+                          padding: "1.25rem 1.5rem",
+                          boxShadow: "0 2px 16px rgba(0,0,0,0.07)",
+                        }}
+                      >
+                        <p style={{ fontWeight: 700, color: "#222", margin: "0 0 0.25rem", fontSize: "1rem" }}>
+                          {capitalize(f.feature_type)}{titleSuffix}
+                        </p>
+                        <p style={{ color: "#555", fontSize: "0.875rem", margin: "0 0 0.25rem" }}>
+                          {boreStr} · {seriesStr}
+                        </p>
+                        <p style={{ color: "#555", fontSize: "0.875rem", margin: "0 0 0.75rem" }}>
+                          {loadStr}
+                        </p>
+                        <div style={{ marginBottom: "0.75rem" }}>
+                          <span
+                            style={{
+                              display: "inline-block",
+                              padding: "2px 8px",
+                              borderRadius: 4,
+                              fontSize: "0.75rem",
+                              fontWeight: 600,
+                              color: "#2e7d32",
+                              background: "#e8f5e9",
+                              marginRight: 6,
+                            }}
+                          >
+                            {lifeStr}
+                          </span>
+                          {b.staticSafetyFactor != null && (
+                            <span
+                              style={{
+                                display: "inline-block",
+                                padding: "2px 8px",
+                                borderRadius: 4,
+                                fontSize: "0.75rem",
+                                fontWeight: 600,
+                                color: "#555",
+                                background: "#f0f0f0",
+                                marginRight: 6,
+                              }}
+                            >
+                              {`Static s0 ${b.staticSafetyFactor.toFixed(1)}`}
+                            </span>
+                          )}
+                        </div>
+                        {footer ? (
+                          <p style={{ fontSize: "0.75rem", color: "#aaa", margin: 0 }}>{footer}</p>
+                        ) : null}
+                      </div>
+                    );
+                  }
+
                   const p = params as SizedParams;
                   const citations = Array.isArray(p.citations) ? p.citations : [];
                   return (
