@@ -45,7 +45,16 @@ const BriefSchema = z.object({
     .optional()
     .default("pump"),
   maxIterations: z.number().int().min(1).max(10).optional().default(5),
-});
+  head: z.number().positive().optional(),
+  impellerDiameter: z.number().positive().optional(),
+  impellerWidth: z.number().positive().optional(),
+  specificGravity: z.number().positive().optional().default(1.0),
+  casingType: z.enum(["single_volute", "double_volute", "diffuser", "concentric"]).optional().default("single_volute"),
+}).refine(
+  (d: { projectType?: string; head?: number; impellerDiameter?: number; impellerWidth?: number }) =>
+    d.projectType !== "pump" || (d.head != null && d.impellerDiameter != null && d.impellerWidth != null),
+  { message: "Pump projects require head, impellerDiameter, and impellerWidth (hydraulic radial-thrust inputs)." }
+);
 
 function json(body: unknown, status = 200): Response {
   return Response.json(body, { status });
@@ -201,6 +210,11 @@ export async function POST(req: Request): Promise<Response> {
       bearingSpan: brief.bearingSpan,
       material: brief.material,
       applicationFactor: brief.applicationFactor,
+      head: brief.head,
+      impellerDiameter: brief.impellerDiameter,
+      impellerWidth: brief.impellerWidth,
+      specificGravity: brief.specificGravity,
+      casingType: brief.casingType,
     };
     result = await iterate(
       { CALCS, CALC_SECRET },

@@ -55,6 +55,11 @@ export function generateShaft(
     bearingSpan: number;
     material: string;
     applicationFactor?: number;
+    head?: number;
+    impellerDiameter?: number;
+    impellerWidth?: number;
+    specificGravity?: number;
+    casingType?: "single_volute" | "double_volute" | "diffuser" | "concentric";
   }
 ): Promise<ShaftGenerateResult> {
   return calcPost<ShaftGenerateResult>(env, "/api/shafts/generate", p);
